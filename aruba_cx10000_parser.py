@@ -9,9 +9,38 @@ import requests
 import argparse
 import redis
 import geoip2.database
-import subprocess 
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+
+# ===== Known protocols as listed by IANA ===========
+PROTOCOL_MAP = {
+    0: "HOPOPT", 1: "ICMP", 2: "IGMP", 3: "GGP", 4: "IPv4", 5: "ST", 6: "TCP", 7: "CBT",
+    8: "EGP", 9: "IGP", 10: "BBN-RCC-MON", 11: "NVP-II", 12: "PUP", 13: "ARGUS", 14: "EMCON",
+    15: "XNET", 16: "CHAOS", 17: "UDP", 18: "MUX", 19: "DCN-MEAS", 20: "HMP", 21: "PRM",
+    22: "XNS-IDP", 23: "TRUNK-1", 24: "TRUNK-2", 25: "LEAF-1", 26: "LEAF-2", 27: "RDP",
+    28: "IRTP", 29: "ISO-TP4", 30: "NETBLT", 31: "MFE-NSP", 32: "MERIT-INP", 33: "DCCP",
+    34: "3PC", 35: "IDPR", 36: "XTP", 37: "DDP", 38: "IDPR-CMTP", 39: "TP++", 40: "IL",
+    41: "IPv6", 42: "SDRP", 43: "IPv6-Route", 44: "IPv6-Frag", 45: "IDRP", 46: "RSVP",
+    47: "GRE", 48: "DSR", 49: "BNA", 50: "ESP", 51: "AH", 52: "I-NLSP", 53: "SWIPE",
+    54: "NARP", 55: "Min-IPv4", 56: "TLSP", 57: "SKIP", 58: "IPv6-ICMP", 59: "IPv6-NoNxt",
+    60: "IPv6-Opts", 61: "any host internal protocol", 62: "CFTP", 63: "any local network",
+    64: "SAT-EXPAK", 65: "KRYPTOLAN", 66: "RVD", 67: "IPPC", 68: "any distributed file system",
+    69: "SAT-MON", 70: "VISA", 71: "IPCV", 72: "CPNX", 73: "CPHB", 74: "WSN", 75: "PVP",
+    76: "BR-SAT-MON", 77: "SUN-ND", 78: "WB-MON", 79: "WB-EXPAK", 80: "ISO-IP", 81: "VMTP",
+    82: "SECURE-VMTP", 83: "VINES", 84: "IPTM", 85: "NSFNET-IGP", 86: "DGP", 87: "TCF",
+    88: "EIGRP", 89: "OSPFIGP", 90: "Sprite-RPC", 91: "LARP", 92: "MTP", 93: "AX.25",
+    94: "IPIP", 95: "MICP", 96: "SCC-SP", 97: "ETHERIP", 98: "ENCAP", 99: "any private encryption scheme",
+    100: "GMTP", 101: "IFMP", 102: "PNNI", 103: "PIM", 104: "ARIS", 105: "SCPS", 106: "QNX",
+    107: "A/N", 108: "IPComp", 109: "SNP", 110: "Compaq-Peer", 111: "IPX-in-IP", 112: "VRRP",
+    113: "PGM", 114: "any 0-hop protocol", 115: "L2TP", 116: "DDX", 117: "IATP", 118: "STP",
+    119: "SRP", 120: "UTI", 121: "SMP", 122: "SM", 123: "PTP", 124: "ISIS over IPv4", 125: "FIRE",
+    126: "CRTP", 127: "CRUDP", 128: "SSCOPMCE", 129: "IPLT", 130: "SPS", 131: "PIPE", 132: "SCTP",
+    133: "FC", 134: "RSVP-E2E-IGNORE", 135: "Mobility Header", 136: "UDPLite", 137: "MPLS-in-IP",
+    138: "manet", 139: "HIP", 140: "Shim6", 141: "WESP", 142: "ROHC", 143: "Ethernet",
+    144: "AGGFRAG", 145: "NSH", 146: "Homa", 147: "BIT-EMU", 253: "experimental", 254: "experimental",
+    255: "Reserved"
+}
 
 # ===== ARG PARSING =====
 parser = argparse.ArgumentParser(description="Syslog to Microsoft Sentinel Forwarder")
@@ -28,7 +57,7 @@ SHARED_KEY = config["shared_key"]
 LOG_TYPE = config.get("log_type", "PensandoFlowLog")
 MAPPORT = config.get("mapport", True)
 MAXMIND_ENABLED = config.get("maxmind_enabled", True)
-MAXMIND_DB_PATH = config.get("maxmind_db_path", "GeoLite2-City.mmdb")  # Path to MaxMind database file, use the geoipupdate program to install. Files will be in /var/lib/GeoIP/, automate upgrades to this also following maxmind instructions
+MAXMIND_DB_PATH = config.get("maxmind_db_path", "GeoLite2-City.mmdb")  # Path to MaxMind database file
 MAX_BATCH_SIZE = config.get("max_batch_size", 25)
 
 UDP_IP = "0.0.0.0"
@@ -104,7 +133,6 @@ def geoip_lookup(ip_address):
         "geo_longitude": 0.0
     }
 
-    # Perform the lookup if MaxMind is enabled in the config file (set to true)
     if MAXMIND_ENABLED:
         try:
             reader = geoip2.database.Reader(MAXMIND_DB_PATH)
@@ -121,20 +149,16 @@ def geoip_lookup(ip_address):
 
     return geo_info
 
-# ===== GET APPLICATION NAME BASED ON DESTINATION PORT USING WHATPORTIS USING OS DIRECTLY =====
+# ===== GET APPLICATION NAME BASED ON DESTINATION PORT USING WHATPORTIS =====
 def get_application_by_port(port):
     try:
-        # Run the 'whatportis' command to get the service information for the port
         result = subprocess.run(
             ['whatportis', str(port), '--json'],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
         )
-
-        # Parse the JSON output
         data = json.loads(result.stdout.decode('utf-8'))
 
         if data:
-            # Return the name and description of the service if available
             app_name = data[0].get('name', 'Unknown Application')
             app_description = data[0].get('description', 'No description available')
             return app_name, app_description
@@ -147,74 +171,90 @@ def get_application_by_port(port):
 # ===== PARSE INCOMING SYSLOG LINE =====
 def parse_syslog_line(line):
     try:
+        # Split the syslog header (RFC5424 format)
+        parts = line.split(" ", 7)
+        if len(parts) >= 7:
+            # Corrected extraction: hostname is the third field (index 2)
+            hostname = parts[2]
+            message = parts[7].strip()
+        else:
+            hostname = "Unknown"
+            message = line.strip()
+
+        # Find the start of the CSV message (RFC3339 timestamp + comma)
         for part in line.split():
             if ',' in part and part[:4].isdigit():
-                csv_start = line.find(part)
-                message = line[csv_start:].strip()
                 fields = message.split(',')
 
                 if len(fields) < 38:
                     if DEBUG:
                         print(f"[-] Not enough fields in message (found {len(fields)}): {message}")
-                        print(len(fields))
                     return None
 
-                
-                flags = int(fields[37]) 
+                flags = int(fields[37])
+                protocol_number = int(fields[8])
 
+                # Build the parsed log with detailed field descriptions
                 parsed_log = {
                     "timestamp": datetime.datetime.fromisoformat(fields[0].replace("Z", "+00:00")).strftime('%Y-%m-%dT%H:%M:%SZ'),  # ts: Flow record timestamp, RFC3339
-                    "flow_action": fields[1],                                # flowaction: flow_create or flow_delete
-                    "rule_action": fields[2],                                # act: Allow or Deny
-                    "vrf": fields[3],                                        # vpcid: Source VRF UUID
-                    "SourceIP": fields[4],                                   # sip: Source IP address, field name should align to Sentinel expectations for threat intel
-                    "source_port": int(fields[5]),                           # sport: Source port
-                    "DestinationIP": fields[6],                              # dip: Destination IP address, field name should align to Sentinel expectations for threat intel
-                    "destination_port": int(fields[7]),                      # dport: Destination port
-                    "protocol": int(fields[8]),                              # proto: IP protocol number
-                    "session_id": int(fields[9]),                            # sessionid: Flow session ID
-                    "security_policy_id": fields[10],                        # securitypolicyid: Security policy UUID
-                    "rule_id": int(fields[11]),                              # ruleid: Rule hash
-                    "rule_name": fields[12],                                 # rulename: Rule name
-                    "iflow_packets": int(fields[13]),                        # iflowpkts: Initiator → Responder packets
-                    "iflow_bytes": int(fields[14]),                          # iflowbytes: Initiator → Responder bytes
-                    "rflow_packets": int(fields[15]),                        # rflowpkts: Responder → Initiator packets
-                    "rflow_bytes": int(fields[16]),                          # rflowbytes: Responder → Initiator bytes
-                    "vlan": int(fields[17]),                                 # vlan: VLAN ID
-                    "product": fields[18],                                   # producttype: DSS
-                    "sw_version": fields[19],                                # softwareversion: AOS-CX version
-                    "serial_number": fields[20],                             # serialnumber: Serial number of DSS
-                    "device_mac": fields[21],                                # devicemac: MAC address of DSS
-                    "unit_id": int(fields[22]),                              # unitid: DSM unit ID (1 or 2)
-                    "version": fields[23],                                   # version: V3
-                    "policy_name": fields[24],                               # policyname: Security policy name
-                    "policy_display_name": fields[25],                       # policydisplayname: Policy display name
-                    "nat_translated_src_ip": fields[26],                     # nattranslatedsrcip: NAT source IP (IPv4)
-                    "nat_translated_dst_ip": fields[27],                     # nattranslateddestip: NAT destination IP (IPv4)
-                    "nat_translated_dst_port": fields[28],                   # nattranslateddestport: NAT destination port
-                    "encrypted": fields[29].lower() == "true",               # encrypted: IPsec encryption true/false
-                    "direction": fields[30],                                 # direction: from-host / uplink
-                    "create_reason": fields[31],                             # createreason: Why flow was created
-                    "delete_reason": fields[32],                             # deletereason: Why flow was deleted
-                    "src_vrf": fields[33],                                   # srcvpcname: Pre-routed VRF name
-                    "dst_vrf": fields[34],                                   # dstvpcname: Post-routed VRF name
-                    "dst_vrf_id": fields[35],                                # dstvpcid: Destination VRF UUID
-                    "dst_vlan": int(fields[36]),                             # dstvlan: Post-routed VLAN
-                    "session_flags": flags,                                  # sessionflags: 64-bit session bitmap
-                    "src_primary_vlan": int(fields[38]),                     # sourceprimaryvlan
-                    "dst_primary_vlan": int(fields[39]),                     # destprimaryvlan
-
-                    # Derived from session_flags bitmap
-                    "session_stateless": bool(flags & (1 << 0)),             # Bit 0: Stateless session
-                    "session_encrypted": bool(flags & (1 << 1)),             # Bit 1: IPsec encrypted
-                    "session_fragmented": bool(flags & (1 << 2))             # Bit 2: IP fragment seen
+                    "EventCount": 1,
+                    "EventVendor": "Aruba/HPE Networking",
+                    "EventProduct": "CX10000",
+                    "EventSchema": "CX10000",
+                    "EventSchemaVersion": "10.15",
+                    "EventProduct": fields[18],                                         # ASIM: EventProduct
+                    "Dvc": hostname,
+                    "DvcHostname": hostname,                                            # Hostname extracted from syslog header (e.g., CX10K-C)
+                    "DvcOs": "CX-OS",
+                    "DvcOsVersion": fields[19],                                         # ASIM: EventProductVersion
+                    "DvcId": fields[20],                                                # ASIM: DvcId (e.g. serial number)
+                    "DvcMacAddr": fields[21],                                           # ASIM: DvcMacAddr
+                    "DvcAction": fields[1],                                             # ASIM flowaction: flow_create or flow_delete
+                    "UnitID": int(fields[22]),                                          # Unit ID, this is the individual DPU in the chassis
+                    "Version": fields[23],                                              # Version        
+                    "vrf": fields[3],                                                   # vpcid: Source VRF UUID
+                    "rule_action": fields[2],                                           # act: Allow or Deny
+                    "SourceIP": fields[4],                                              # ASIM: SrcIpAddr
+                    "SourcePort": int(fields[5]),                                       # Source Port
+                    "DestinationIP": fields[6],                                         # ASIM: DstIpAddr
+                    "DestinationPort": int(fields[7]),                                  # Destination Port
+                    "NetworkProtocol": PROTOCOL_MAP.get(protocol_number, "Unknown"),    # ASIM: Network Protocol
+                    "SessionId": int(fields[9]),                                        # ASIM: SessionId
+                    "security_policy_id": fields[10],                                   # Security Policy ID
+                    "RuleID": int(fields[11]),                                          # Rule ID
+                    "RuleName": fields[12],                                             # Human readable rule name
+                    "IFlowPackets": int(fields[13]),                                    # iflowpkts
+                    "IFlowBytes": int(fields[14]),                                      # iflowbytes
+                    "RFlowPackets": int(fields[15]),                                    # rflowpkts
+                    "RFlowBytes": int(fields[16]),                                      # rflowbytes
+                    "VLAN": int(fields[17]),                                            # VLAN Tag ID
+                    "PolicyName": fields[24],                                           # Human readable Policy name
+                    "PolicyDisplayName": fields[25],                                    # Policy name, if configured
+                    "NatTranslatedSourceIP": fields[26],                                # NAT Translated source IP Address
+                    "NatTranslatedDestinationIP": fields[27],                           # NAT Translated destination IP address
+                    "NatTranslatedDestinationPort": int(fields[28]),                         # NAT Translated destination port
+                    "EncryptionStatus": fields[29].lower() == "true",                   # Encrypted status
+                    "NetworkDirection": fields[30].replace("-", "").capitalize(),       # ASIM: NetworkDirection (e.g. Fromhost)
+                    "EventType": "FlowInitiated" if fields[1] == "flow_create" else "FlowTerminated",  # ASIM: EventType
+                    "EventResult": "Success" if fields[2].lower() == "allow" else "Failure",  # ASIM: EventResult
+                    "CreateReason": fields[31],                                         # Flow create reason
+                    "DeleteReason": fields[32],                                         # Flow delete Reason
+                    "SourceVrf": fields[33],                                            # Source VRF
+                    "DestinationVrf": fields[34],                                       # Destination VRF
+                    "DestinationVrfID": fields[35],                                     # Destination VRF ID
+                    "DestinationVLAN": int(fields[36]),                                 # Destination VLAN Tag
+                    "SessionFlags": flags,                                              # Session flags 64-bit bitmap
+                    "SourcePrimaryVLAN": int(fields[38]),                               # Source Primary VLAN Tag
+                    "DestinationPrimaryVLAN": int(fields[39]),                          # Destination Primary VLAN Tag
+                    # Extracted from session_flags bitmap
+                    "SessionStateless": bool(flags & (1 << 0)),                         # Bit 0: Stateless session
+                    "SesssionEncrypted": bool(flags & (1 << 1)),                        # Bit 1: IPsec encrypted
+                    "SessionFragmented": bool(flags & (1 << 2))                         # Bit 2: IP fragment seen
                 }
 
-                # Perform GeoIP lookup if enabled
                 if MAXMIND_ENABLED:
-                    src_geo = geoip_lookup(fields[4])                        # Lookup the source IP
-                    dst_geo = geoip_lookup(fields[6])                        # Lookup the destination IP
-
+                    src_geo = geoip_lookup(fields[4])
+                    dst_geo = geoip_lookup(fields[6])
                     parsed_log.update({
                         **src_geo,
                         "geo_src_country": src_geo["geo_country"],
@@ -228,11 +268,10 @@ def parse_syslog_line(line):
                         "geo_dst_longitude": dst_geo["geo_longitude"]
                     })
 
-                # Add application name and description based on destination port
                 if MAPPORT:
-                    app_name, app_description = get_application_by_port(int(fields[7]))  # Use destination port form the log 
-                    parsed_log["app_name"] = app_name
-                    parsed_log["app_description"] = app_description
+                    app_name, app_description = get_application_by_port(int(fields[7]))
+                    parsed_log["app_name"] = app_name                                   # Application name determined by destination port
+                    parsed_log["app_description"] = app_description                     # Application description determined by destination port
 
                 if DEBUG:
                     print(f"[DEBUG] Parsed log with GeoIP info and Application:\n{json.dumps(parsed_log, indent=2)}")
@@ -255,6 +294,11 @@ def handle_syslog_message(data, addr):
             print(f"[DEBUG] Raw syslog line from {addr[0]}: {log_line}")
         parsed = parse_syslog_line(log_line)
         if parsed:
+            # Add the DvcIpAddr field with the source IP from the UDP packet
+            parsed["DvcIpAddr"] = addr[0]
+            # Debug print after adding the DvcIpAddr field
+            if DEBUG:
+                print(f"[DEBUG] Parsed log after adding DvcIpAddr:\n{json.dumps(parsed, indent=2)}")
             with buffer_lock:
                 log_buffer.append(parsed)
                 if len(log_buffer) >= MAX_BATCH_SIZE:
