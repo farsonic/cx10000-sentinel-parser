@@ -7,7 +7,6 @@ import base64
 import json
 import requests
 import argparse
-import redis
 import geoip2.database
 import subprocess
 import time
@@ -63,17 +62,6 @@ MAX_BATCH_SIZE = config.get("max_batch_size", 25)
 UDP_IP = "0.0.0.0"
 UDP_PORT = 5514
 
-# ===== REDIS CLIENT =====
-try:
-    redis_client = redis.Redis(host='localhost', port=6379, db=0)
-    redis_client.ping()
-    REDIS_AVAILABLE = True
-    if DEBUG:
-        print("[DEBUG] Connected to Redis at localhost:6379")
-except Exception as e:
-    print(f"[!] Redis unavailable: {e}")
-    REDIS_AVAILABLE = False
-
 # ===== LOG BUFFER =====
 log_buffer = []
 buffer_lock = threading.Lock()
@@ -106,17 +94,11 @@ def send_logs(entries):
         try:
             response = requests.post(url, headers=headers, data=body, timeout=10)
             if response.status_code == 200:
-                if REDIS_AVAILABLE:
-                    redis_client.incr("sentinel:logs:success")
                 break
             else:
-                if REDIS_AVAILABLE:
-                    redis_client.incr("sentinel:logs:failure")
                 if DEBUG:
                     print(f"[!] Failed HTTP {response.status_code}: {response.text}")
         except Exception as e:
-            if REDIS_AVAILABLE:
-                redis_client.incr("sentinel:logs:failure")
             if DEBUG:
                 print(f"[!] Retry {attempt+1} failed: {e}")
             time.sleep(2 ** attempt)
@@ -232,7 +214,7 @@ def parse_syslog_line(line):
                     "PolicyDisplayName": fields[25],                                    # Policy name, if configured
                     "NatTranslatedSourceIP": fields[26],                                # NAT Translated source IP Address
                     "NatTranslatedDestinationIP": fields[27],                           # NAT Translated destination IP address
-                    "NatTranslatedDestinationPort": int(fields[28]),                         # NAT Translated destination port
+                    "NatTranslatedDestinationPort": int(fields[28]),                    # NAT Translated destination port
                     "EncryptionStatus": fields[29].lower() == "true",                   # Encrypted status
                     "NetworkDirection": fields[30].replace("-", "").capitalize(),       # ASIM: NetworkDirection (e.g. Fromhost)
                     "EventType": "FlowInitiated" if fields[1] == "flow_create" else "FlowTerminated",  # ASIM: EventType
@@ -260,12 +242,12 @@ def parse_syslog_line(line):
                         "geo_src_country": src_geo["geo_country"],
                         "geo_src_city": src_geo["geo_city"],
                         "geo_src_latitude": src_geo["geo_latitude"],
-                        "geo_src_longitude": src_geo["geo_longitude"],
+                        "geo_src_longitude": src_geo["geo_src_longitude"] if "geo_src_longitude" in src_geo else src_geo["geo_longitude"],
                         **dst_geo,
                         "geo_dst_country": dst_geo["geo_country"],
                         "geo_dst_city": dst_geo["geo_city"],
                         "geo_dst_latitude": dst_geo["geo_latitude"],
-                        "geo_dst_longitude": dst_geo["geo_longitude"]
+                        "geo_dst_longitude": dst_geo["geo_dst_longitude"] if "geo_dst_longitude" in dst_geo else dst_geo["geo_longitude"]
                     })
 
                 if MAPPORT:
