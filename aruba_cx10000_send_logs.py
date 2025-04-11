@@ -21,40 +21,69 @@ SYSLOG_PORT = args.port
 OFFSET_HOURS = args.offset
 DELAY = 1.0 / RATE
 
-# === Generate 30-field CSV payload (as strings) ===
+# === Generate a random public or private IP ===
+def generate_ip(is_public=True):
+    if is_public:
+        return f"8.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 255)}"
+    else:
+        ip_ranges = [
+            f"10.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}",
+            f"172.{random.randint(16, 31)}.{random.randint(0, 255)}.{random.randint(1, 254)}",
+            f"192.168.{random.randint(0, 255)}.{random.randint(1, 254)}"
+        ]
+        return random.choice(ip_ranges)
+
+# === Generate aligned 40-field CSV payload ===
 def generate_payload(past_time):
     timestamp = past_time.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Session flags (64-bit bitmap)
+    stateless = random.choice([0, 1])    # bit 0
+    encrypted = random.choice([0, 1])    # bit 1
+    fragmented = random.choice([0, 1])   # bit 2
+    session_flags = (stateless << 0) | (encrypted << 1) | (fragmented << 2)
+
     fields = [
-        timestamp,
-        random.choice(["flow_create", "flow_delete"]),
-        random.choice(["allow", "deny"]),
-        str(uuid.uuid4()),                            # vrf
-        f"10.29.21.{random.randint(1, 254)}",          # source_ip
-        str(random.randint(1000, 65535)),              # source_port
-        f"10.29.22.{random.randint(1, 254)}",          # destination_ip
-        str(random.choice([22, 53, 80, 443, 3306])),   # destination_port
-        str(random.choice([6, 17])),                   # protocol
-        str(random.randint(100000, 999999)),           # session_id
-        str(uuid.uuid4()),                             # security_policy_id
-        str(random.randint(1, 99999)),                 # rule_id
-        random.choice(["allow-ssh", "allow-http", "allow-mysql", "deny-all"]),
-        str(random.randint(0, 1000)),                  # iflow_packets
-        str(random.randint(0, 50000)),                 # iflow_bytes
-        str(random.randint(0, 1000)),                  # rflow_packets
-        str(random.randint(0, 50000)),                 # rflow_bytes
-        str(random.randint(1, 4094)),                  # source_vlan
-        "DL.10.15.1005",                               # sw_version
-        "FSJ21440004",                                 # serial_number
-        "0490.8100.54ce",                              # device_name
-        str(random.randint(1, 10)),                    # unit_id
-        "pod1-vlan21-egress",                          # policy_name
-        "pod1-vlan21-egress",                          # policy_display_name
-        "192.168.1.100",                               # NAT src
-        "192.168.1.200",                               # NAT dst
-        "8080",                                        # NAT dst port
-        random.choice(["true", "false"]),              # encrypted
-        "from-host",                                   # direction
-        random.choice(["tcp_full_close", "aged-out", "tcp-reset", "other"])
+        timestamp,                                     # 0 - ts
+        random.choice(["flow_create", "flow_delete"]),# 1 - flowaction
+        random.choice(["allow", "deny"]),             # 2 - act
+        str(uuid.uuid4()),                             # 3 - vpcid
+        generate_ip(is_public=False),                  # 4 - sip
+        str(random.randint(1000, 65535)),              # 5 - sport
+        generate_ip(is_public=True),                   # 6 - dip
+        str(random.choice([22, 53, 80, 443, 3306])),   # 7 - dport
+        str(random.choice([6, 17])),                   # 8 - proto
+        str(random.randint(100000, 999999)),           # 9 - sessionid
+        str(uuid.uuid4()),                             # 10 - securitypolicyid
+        str(random.randint(1, 99999)),                 # 11 - ruleid
+        random.choice(["allow-ssh", "allow-http", "allow-mysql", "deny-all"]),  # 12 - rulename
+        str(random.randint(0, 1000)),                  # 13 - iflowpkts
+        str(random.randint(0, 50000)),                 # 14 - iflowbytes
+        str(random.randint(0, 1000)),                  # 15 - rflowpkts
+        str(random.randint(0, 50000)),                 # 16 - rflowbytes
+        str(random.randint(1, 4094)),                  # 17 - vlan
+        "DSS",                                         # 18 - producttype
+        "10.14.1001",                                  # 19 - softwareversion
+        "SN0123456789",                                # 20 - serialnumber
+        "00:11:22:33:44:55",                           # 21 - devicemac
+        str(random.randint(1, 2)),                     # 22 - unitid
+        "V3",                                          # 23 - version
+        "policy-1",                                    # 24 - policyname
+        "Policy Display Name",                         # 25 - policydisplayname
+        "192.168.100.1",                               # 26 - nattranslatedsrcip
+        "192.168.200.1",                               # 27 - nattranslateddestip
+        "8080",                                        # 28 - nattranslateddestport
+        random.choice(["true", "false"]),              # 29 - encrypted
+        random.choice(["from-host", "uplink"]),        # 30 - direction
+        random.choice(["flow_miss", "flow_sync", "vmotion"]),         # 31 - createreason
+        random.choice(["aging", "tcp_full_close", "tcp_rst"]),        # 32 - deletereason
+        str(uuid.uuid4()),                             # 33 - srcvpcname
+        str(uuid.uuid4()),                             # 34 - dstvpcname
+        str(uuid.uuid4()),                             # 35 - dstvpcid
+        str(random.randint(1, 4094)),                  # 36 - dstvlan
+        str(session_flags),                            # 37 - sessionflags
+        str(random.randint(1, 4094)),                  # 38 - sourceprimaryvlan
+        str(random.randint(1, 4094))                   # 39 - destprimaryvlan
     ]
     return ",".join(fields)
 
