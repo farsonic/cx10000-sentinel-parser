@@ -1,0 +1,10 @@
+{
+  "workspace_id": "WORKSPACE ID",
+  "shared_key": "SENTINAL PRIVATE KEY",
+  "log_type": "CX10000",
+  "max_batch_size": 100,
+  "mapport": false,
+  "maxmind_enabled": false,
+  "maxmind_api_key": "MAXMIND API KEY HERE (optional)",
+  "maxmind_db_path": "/var/lib/GeoIP/GeoLite2-City.mmdb"
+}
